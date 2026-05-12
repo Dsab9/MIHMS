@@ -9,7 +9,7 @@ import xarray as xr
 from flopy.utils.triangle import Triangle
 from flopy.utils.voronoi import VoronoiGrid
 from flopy.discretization import VertexGrid as FlopyVertexGrid
-from gsflow import PrmsData
+# from gsflow import PrmsData
 
 from mihms.config import project_root, prep
 from mihms.utils.io import NpEncoder
@@ -147,8 +147,8 @@ def create_obs_dataset(obs_data: pd.DataFrame,
 
     return obs_dset
 
-def append_obs_to_datafile(dfile: Union[str, Path, PrmsData], obsdset: xr.Dataset):
-    raise NotImplementedError("This function is not available yet.")
+# def append_obs_to_datafile(dfile: Union[str, Path, PrmsData], obsdset: xr.Dataset):
+#     raise NotImplementedError("This function is not available yet.")
 
 def voronoi_grid_from_hydrography(
         basin_geom: gpd.GeoDataFrame,

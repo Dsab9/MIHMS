@@ -7,7 +7,7 @@ from .params import (
     dims_remap,
     PRMSParameters,
     PRMSCascades,
-    join_pygsflow_params,
+    join_pywatershed_params,
     validate_param_dset,
     get_prms_dtype,
     ddsolrad_defaults,

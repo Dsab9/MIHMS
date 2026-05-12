@@ -3,6 +3,7 @@ from subprocess import check_call
 from typing import Union
 from pathlib import Path
 import datetime
+from typing import Union
 
 import geopandas as gpd
 import pandas as pd
@@ -11,7 +12,9 @@ import rioxarray
 import fiona
 import numpy as np
 from shapely.geometry import shape
-from gsflow.prms import PrmsData
+import pywatershed as pws
+from pywatershed.utils import PrmsFile
+# from gsflow.prms import PrmsData
 
 from mihms.config import prep
 
@@ -112,56 +115,74 @@ def check_max_temp_string(strg: str) -> bool:
 
 # this is a copy from pygsflow code - develop branch, stand in until the develop branch is merged to master and the
 # pandas deprication problem is fixed with lineterminator
-def write_prms_datafile(data_obj: PrmsData, filename: Union[str, Path]):
+# def write_prms_datafile(data_obj: PrmsData, filename: Union[str, Path]):
+#     """
+#     Method to write PrmsData input to a PRMS Data file
+
+#     Parameters
+#     ----------
+#     data_obj: gsflow.prms.PrmsData
+#         A gsflow data object to write out to file.
+#     filename : str | Path
+#         Data file file name
+
+#     """
+
+#     with open(filename, "w") as fid:
+#         fid.write(data_obj.header)
+#         fid.write("\n")
+#         columns = data_obj.data_df.columns
+#         climate_data = []
+#         climate_count = {}
+#         climate_unique = []
+#         for col in columns:
+#             nm = col[:col.rfind('_')]
+#             if nm in PrmsData.data_names:
+#                 climate_data.append(nm)
+#                 if not (nm in climate_unique):
+#                     climate_unique.append(nm)
+#                 if nm in climate_count.keys():
+#                     climate_count[nm] = climate_count[nm] + 1
+#                 else:
+#                     climate_count[nm] = 1
+
+#         # write headers
+#         for clim_name in climate_unique:
+#             line = clim_name + " " + str(climate_count[clim_name]) + "\n"
+#             fid.write(line)
+#         fid.write(
+#             "#########################################################################\n"
+#         )
+#         pd_to_write = data_obj.data_df.copy()
+#         pd_to_write = pd_to_write.drop(["Date"], axis=1)
+
+#         try:
+#             pd_to_write.to_csv(
+#                 fid, index=False, sep=" ", lineterminator="\n", header=False
+#             )
+#         except:
+#             # remove this once line_terminator is fully deprecated
+#             pd_to_write.to_csv(
+#                 fid, index=False, sep=" ", line_terminator="\n", header=False
+#             )
+
+
+def write_prms_datafile(data_obj: PrmsFile, filename: Union[str, Path]):
     """
-    Method to write PrmsData input to a PRMS Data file
+    Method to write PrmsFile input to a PRMS Data file using pywatershed.
 
     Parameters
     ----------
-    data_obj: gsflow.prms.PrmsData
-        A gsflow data object to write out to file.
+    data_obj: pywatershed.utils.PrmsFile
+        The pywatershed object holding the climate data and metadata.
     filename : str | Path
-        Data file file name
-
+        Output path for the .data file.
     """
+    filename = Path(filename)
 
-    with open(filename, "w") as fid:
-        fid.write(data_obj.header)
-        fid.write("\n")
-        columns = data_obj.data_df.columns
-        climate_data = []
-        climate_count = {}
-        climate_unique = []
-        for col in columns:
-            nm = col[:col.rfind('_')]
-            if nm in PrmsData.data_names:
-                climate_data.append(nm)
-                if not (nm in climate_unique):
-                    climate_unique.append(nm)
-                if nm in climate_count.keys():
-                    climate_count[nm] = climate_count[nm] + 1
-                else:
-                    climate_count[nm] = 1
-
-        # write headers
-        for clim_name in climate_unique:
-            line = clim_name + " " + str(climate_count[clim_name]) + "\n"
-            fid.write(line)
-        fid.write(
-            "#########################################################################\n"
-        )
-        pd_to_write = data_obj.data_df.copy()
-        pd_to_write = pd_to_write.drop(["Date"], axis=1)
-
-        try:
-            pd_to_write.to_csv(
-                fid, index=False, sep=" ", lineterminator="\n", header=False
-            )
-        except:
-            # remove this once line_terminator is fully deprecated
-            pd_to_write.to_csv(
-                fid, index=False, sep=" ", line_terminator="\n", header=False
-            )
+    # PrmsFile has a native .write() method that handles
+    # the header, variable counts, and data formatting.
+    data_obj.write(filename)
 
 def convert_pywatershed_dims(dimtup: tuple) -> tuple:
     """

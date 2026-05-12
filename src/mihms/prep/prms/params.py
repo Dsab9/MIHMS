@@ -5,7 +5,6 @@ import warnings
 import inspect
 from typing import Union, Optional
 
-
 import geopandas as gpd
 import pandas as pd
 import rasterio as rio
@@ -13,11 +12,11 @@ import xarray as xr
 import numpy as np
 from flopy.discretization import VertexGrid as FlopyVertexGrid
 from GRIDtools.zonal import calc_zonal_stats
-from gsflow.prms import ParameterRecord
-from gsflow import PrmsParameters as pygsflowparams
-from gsflow.builder import builder_utils as bu
+from pywatershed.parameters import Parameters as PywsParameters
+from pywatershed.base.adapter import adapter_factory
 import dany
 from shapely.geometry import LineString
+
 
 from mihms.config import prep
 from mihms.prep.prms.domain import PRMSVertexGrid, find_undeclared_sinks
@@ -105,10 +104,9 @@ class PRMSParameters:
         if grid is not None:
             self.grid = grid
 
-        self._pygsflow_dimrecs = None
+        self._pywatershed_params = None
 
         self._from_files = []
-
 
     @property
     def grid(self):
@@ -127,11 +125,11 @@ class PRMSParameters:
                     raise ValueError("The input grid does not match the number of HRUs.")
             else:
                 msg = " ".join(
-                        [
-                            f"There are no parameters specified yet and or no nhru dimension to check grid.",
-                            "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
-                        ]
-                    )
+                    [
+                        f"There are no parameters specified yet and or no nhru dimension to check grid.",
+                        "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
+                    ]
+                )
                 user_warning(
                     msg,
                     inspect.getframeinfo(
@@ -150,11 +148,11 @@ class PRMSParameters:
                     raise ValueError("The input grid does not match the number of HRUs.")
             else:
                 msg = " ".join(
-                        [
-                            f"There are no parameters specified yet and or no nhru dimension to check grid.",
-                            "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
-                        ]
-                    )
+                    [
+                        f"There are no parameters specified yet and or no nhru dimension to check grid.",
+                        "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
+                    ]
+                )
                 user_warning(
                     msg,
                     inspect.getframeinfo(
@@ -171,10 +169,10 @@ class PRMSParameters:
                     raise ValueError("The input grid does not match the number of HRUs.")
             else:
                 msg = " ".join(
-                        [
-                            f"There are no parameters specified yet and or no nhru dimension to check grid.",
-                            "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
-                        ])
+                    [
+                        f"There are no parameters specified yet and or no nhru dimension to check grid.",
+                        "Assigning grid anyway, make sure to check any inserted parameters match the grid size."
+                    ])
                 user_warning(
                     msg,
                     inspect.getframeinfo(
@@ -215,70 +213,32 @@ class PRMSParameters:
         else:
             raise ValueError("The input xarray dataset contains invalid parameters or dimensions.")
 
-    # pygsflow param object has to include dimensions section as well
     @property
-    def pygsflow_param_obj(self):
-        param_list = []
+    def pywatershed_param_obj(self):
+        """Convert to pywatershed Parameters object"""
         if len(list(self.parameters.data_vars)) == 0:
             raise ValueError("There are no parameters specified.")
-        if self._pygsflow_dimrecs is None:
-            for key, value in self.parameters.sizes.items():
-                if len(self._from_files) > 0:
-                    dim_record = ParameterRecord(name=key, values=[value], datatype=1, file_name=self._from_files[0])
-                else:
-                    dim_record = ParameterRecord(name=key, values=[value], datatype=1)
-                param_list.append(dim_record)
-        else:
-            param_list = param_list + self._pygsflow_dimrecs
-            for key, value in self.parameters.sizes.items():
-                if key in [x.name for x in self._pygsflow_dimrecs]:
-                    continue
-                else:
-                    if len(self._from_files) > 0:
-                        dim_record = ParameterRecord(name=key, values=[value], datatype=1,
-                                                     file_name=self._from_files[0])
-                    else:
-                        dim_record = ParameterRecord(name=key, values=[value], datatype=1)
-                    param_list.append(dim_record)
-        for v in list(self.parameters.data_vars):
-            darray = self.parameters[v]
-            vals = darray.values
-            vdtype = get_prms_dtype(vals.dtype, 'numpy')
-            dims = darray.dims
-            recorddims = []
-            for d in range(len(dims)):
-                rdim = [dims[d], vals.shape[d]]
-                recorddims.append(rdim)
 
-            # assume everything coming from PRMSparameters class is C ordered, translate to Fortran ordered for
-            #   pygsflow object
-            recorddims.reverse()
-            if 'file_name' in self.parameters[v].attrs.keys():
-                record = ParameterRecord(
-                    v,
-                    vals.ravel(),
-                    dimensions=recorddims,
-                    datatype=vdtype,
-                    file_name=self.parameters[v].attrs['file_name']
-                )
-            elif ('file_name' not in self.parameters[v].attrs.keys()) & (len(self._from_files) > 0):
-                record = ParameterRecord(
-                    v,
-                    vals.ravel(),
-                    dimensions=recorddims,
-                    datatype=vdtype,
-                    file_name=self._from_files[0]
-                )
-            else:
-                record = ParameterRecord(
-                    v,
-                    vals.ravel(),
-                    dimensions=recorddims,
-                    datatype=vdtype
-                )
-            param_list.append(record)
+        # Convert xarray Dataset to dictionary format expected by pywatershed
+        params_dict = {}
+        dims_dict = {}
 
-        return pygsflowparams(param_list)
+        # Add dimensions
+        for dim_name, dim_size in self.parameters.sizes.items():
+            dims_dict[dim_name] = dim_size
+
+        # Add parameters
+        for var_name in list(self.parameters.data_vars):
+            darray = self.parameters[var_name]
+            params_dict[var_name] = darray.values
+
+        # Create pywatershed Parameters object
+        pws_params = PywsParameters(
+            dims=dims_dict,
+            **params_dict
+        )
+
+        return pws_params
 
     def add_parameter_from_raster(self, param_name: str,
                                   dim_names: Union[str, list],
@@ -352,9 +312,9 @@ class PRMSParameters:
 
         if param_name in list(self.parameters.data_vars):
             msg = " ".join(
-                    [
-                        f"The parameter already exists, overwriting the existing '{param_name}' parameter."
-                    ])
+                [
+                    f"The parameter already exists, overwriting the existing '{param_name}' parameter."
+                ])
             user_warning(
                 msg,
                 inspect.getframeinfo(
@@ -380,7 +340,7 @@ class PRMSParameters:
             if values.shape != (dims[-1], dims[0]):
                 values = np.reshape(values, (dims[-1], dims[0]))
             self.parameters[param_name] = (
-            (dim_names[-1], dim_names[0]), values, attrs)
+                (dim_names[-1], dim_names[0]), values, attrs)
         else:
             if tuple(dim_names) not in dims_remap[metadims]:
                 raise ValueError("The specified dimensions are not available for the specified parameter, check"
@@ -389,42 +349,23 @@ class PRMSParameters:
                 values = np.reshape(values, tuple(dims))
             self.parameters[param_name] = (tuple(dim_names), values, attrs)
 
-    def add_pygsflow_record(self, record: ParameterRecord):
-        if not isinstance(record, ParameterRecord):
-            raise ValueError("The input record is not a pygsflow ParameterRecord object.")
-        if record.file_name is not None:
-            if record.file_name not in self._from_files:
-                self._from_files.append(record.file_name)
-            if record.section == 'Dimensions':
-                if self._pygsflow_dimrecs is None:
-                    self._pygsflow_dimrecs = [record]
-                else:
-                    self._pygsflow_dimrecs.append(record)
-            else:
-                self.add_parameter(record.name,
-                                   record.values,
-                                   record.dims,
-                                   record.dimensions_names,
-                                   add_attrs={'file_name': record.file_name},
-                                   arr_format='F')
-        else:
-            if record.section == 'Dimensions':
-                if self._pygsflow_dimrecs is None:
-                    self._pygsflow_dimrecs = [record]
-                else:
-                    self._pygsflow_dimrecs.append(record)
-            else:
-                self.add_parameter(record.name,
-                                   record.values,
-                                   record.dims,
-                                   record.dimensions_names,
-                                   arr_format='F')
+    def add_pywatershed_param(self, param_name: str, values: np.ndarray, dims: list, dim_names: list):
+        """Add parameter from pywatershed format"""
+        # pywatershed uses C-ordering by default
+        self.add_parameter(
+            param_name,
+            values,
+            dims,
+            dim_names,
+            arr_format='C'
+        )
 
     def set_values(self, param_name: str, newvals: np.ndarray):
         if self._parameters[param_name].values.shape != newvals.shape:
-            raise ValueError(f"The dimensions of the input values do not match the dimensions of {param_name} dimensions. "
-                             f"{param_name} dimensions are {self._parameters[param_name].values.shape}, input values "
-                             f"are {newvals.shape}.")
+            raise ValueError(
+                f"The dimensions of the input values do not match the dimensions of {param_name} dimensions. "
+                f"{param_name} dimensions are {self._parameters[param_name].values.shape}, input values "
+                f"are {newvals.shape}.")
 
         self._parameters[param_name].values = newvals
 
@@ -454,7 +395,7 @@ class PRMSParameters:
                     ob_list.append(po)
                 else:
                     raise ValueError("Item in input list is neither a PRMSParameter object nor xarray Dataset.")
-            merged = xr.merge([self._parameters]+ob_list)
+            merged = xr.merge([self._parameters] + ob_list)
         else:
             raise ValueError("Input is not recognized as either PRMSParameter object or xarray Dataset.")
         self.parameters = merged
@@ -515,7 +456,8 @@ class PRMSParameters:
             if d in ['nhru', 'ngw', 'nssr', 'one']:
                 cdim = d
         if cdim is None:
-            raise NotImplementedError(f"The {name} parameter's dimension is not compatible with assignment by subbasin.")
+            raise NotImplementedError(
+                f"The {name} parameter's dimension is not compatible with assignment by subbasin.")
 
         if 'hru_subbasin' in list(self._parameters.data_vars):
             subbasins = self.parameters['hru_subbasin'].values
@@ -540,7 +482,6 @@ class PRMSParameters:
             else:
                 idvals = np.where(subbasins == subbasin_idx)[0]
                 self.change_parameter(name, values, cdim, operation=operation, idx={cdim: idvals})
-            
 
     def change_parameter(self,
                          name: str,
@@ -624,7 +565,7 @@ class PRMSParameters:
             if isinstance(values, (int, float)):
                 if vsize != par_shp:
                     raise ValueError(f"Only one value was provided for the dimension(s) {dim}, when only one dimension"
-                                 f" is specified, the values must match the shape of that dimension.")
+                                     f" is specified, the values must match the shape of that dimension.")
                 pass
             else:
                 values = np.reshape(values, vsize)
@@ -640,85 +581,24 @@ class PRMSParameters:
         else:
             raise ValueError("The operation argument is not recognized as 'replace', 'multiply', or 'add'")
 
-    # This appears to work for a single file, but if multiple files were loaded using pygsflow methods, I'm not sure
-    #   that this writes/orients correctly
     def write_paramfile(self, flname: Optional[Union[str, Path, list[Union[str, Path]]]] = None):
-        if len(self._from_files) != 0:
-            if flname is not None:
-                if (isinstance(flname, (str, Path))) & (len(self._from_files) > 1):
-                    msg = (
-                        f"Only one filename was provided to rename multiple parameter files, "
-                        f"defaulting to the original filenames.")
-                    user_warning(
-                        msg,
-                        inspect.getframeinfo(
-                            inspect.currentframe()
-                        ),
-                    )
-                    flname = self._from_files
-                elif (isinstance(flname, list)) & (len(self._from_files) != len(flname)):
-                    msg = (
-                        f"{len(flname)} filenames provided for {len(self._from_files)} parameter files to rename, "
-                        f"defaulting to the original filenames.")
-                    user_warning(
-                        msg,
-                        inspect.getframeinfo(
-                            inspect.currentframe()
-                        ),
-                    )
-                    flname = self._from_files
-                else:
-                    if isinstance(flname, (str, Path)):
-                        flname = [flname]
-            else:
-                flname = self._from_files
+        """Write parameters to file using pywatershed format"""
+        if flname is None:
+            raise ValueError("A file name must be given.")
 
-            arch_param = self.parameters.copy()
-            arch_dimrecs = self._pygsflow_dimrecs.copy()
-            for i, f in enumerate(self._from_files):
-                if isinstance(f, Path):
-                    ff = f.as_posix()
-                else:
-                    ff = f
-                alt_dimrecs = []
-                if arch_dimrecs is not None:
-                    for r in arch_dimrecs:
-                        if isinstance(r.file_name, Path):
-                            rf = r.file_name.as_posix()
-                        else:
-                            rf = r.file_name
-                        if rf == ff:
-                            alt_dimrecs.append(r)
-                        else:
-                            continue
+        if isinstance(flname, list):
+            flname = flname[0]
 
-                varlist = []
-                for v in list(arch_param.data_vars):
-                    var = arch_param[v]
-                    if isinstance(var.attrs['file_name'], Path):
-                        vf = var.attrs['file_name'].as_posix()
-                    else:
-                        vf = var.attrs['file_name']
-                    if vf == ff:
-                        varlist.append(v)
-                    else:
-                        continue
+        # Convert to pywatershed Parameters and write
+        pws_params = self.pywatershed_param_obj
 
-                if len(alt_dimrecs) == 0:
-                    self._pygsflow_dimrecs = None
-                else:
-                    self._pygsflow_dimrecs = alt_dimrecs
-                self.parameters = arch_param[varlist]
-                self.pygsflow_param_obj.write(flname[i])
-
-            self._pygsflow_dimrecs = arch_dimrecs
-            self.parameters = arch_param
-        else:
-            if flname is None:
-                raise ValueError("A file name must be given when parameters are not loaded from file.")
-            if isinstance(flname, list):
-                flname = flname[0]
-            self.pygsflow_param_obj.write(flname)
+        # Use pywatershed's NetCDF adapter to write
+        adapter = adapter_factory(
+            flname,
+            PywsParameters,
+            mode="w"
+        )
+        adapter.output(pws_params)
 
     def _check_param_dtype(self, pname: str, pvals: np.ndarray) -> tuple:
         attrs_m = meta.find_variables(pname)[pname]
@@ -743,20 +623,45 @@ class PRMSParameters:
         return out, ptyp
 
     @staticmethod
-    def load_pygsflow_obj(param_obj: pygsflowparams):
+    def load_pywatershed_obj(param_obj: PywsParameters):
+        """Load from pywatershed Parameters object"""
         newparams = PRMSParameters()
-        for rec in param_obj.parameters_list:
-            newparams.add_pygsflow_record(rec)
+
+        # Convert pywatershed Parameters to xarray Dataset
+        params_dict = {}
+        for param_name in param_obj.parameters:
+            params_dict[param_name] = param_obj[param_name]
+
+        # Create xarray Dataset
+        ds = xr.Dataset(params_dict)
+        newparams.parameters = ds
 
         return newparams
 
     @staticmethod
     def load_paramfile(paramfiles: Union[str, Path, list]):
+        """Load parameter file(s) using pywatershed"""
         if isinstance(paramfiles, (str, Path)):
             paramfiles = [paramfiles]
-        pgsparams = pygsflowparams.load_from_file(paramfiles)
-        inparams = PRMSParameters.load_pygsflow_obj(pgsparams)
 
+        # Use pywatershed adapter to load parameters
+        all_params = None
+        for pfile in paramfiles:
+            adapter = adapter_factory(
+                pfile,
+                PywsParameters,
+                mode="r"
+            )
+            params = adapter.load()
+
+            if all_params is None:
+                all_params = params
+            else:
+                # Merge parameters
+                for key in params.parameters:
+                    all_params[key] = params[key]
+
+        inparams = PRMSParameters.load_pywatershed_obj(all_params)
         return inparams
 
     @staticmethod
@@ -1361,44 +1266,30 @@ class PRMSCascades(PRMSParameters):
         stm_out.to_file(filename)
 
 
-def join_pygsflow_params(param_objs: list, separate_files: bool = False, file_names: Optional[list] = None):
-    joined_lst = []
-    if not separate_files:
+def join_pywatershed_params(param_objs: list, separate_files: bool = False, file_names: Optional[list] = None):
+    """
+    Join multiple PRMSParameters objects into a single merged object.
 
-        for p in param_objs:
-            for r in p.parameters_list:
-                if r in joined_lst:
-                    continue
-                else:
-                    joined_lst.append(r)
-    else:
-        if file_names is None:
-            msg = (
-                "No filenames were provided, using defaults. "
-                f"Defaults saved to '{os.getcwd()}'"
-            )
-            user_warning(
-                msg,
-                inspect.getframeinfo(
-                    inspect.currentframe()
-                ),
-            )
-            file_names = [f'paramfile_0{n}.params' for n in range(len(param_objs))]
-        else:
-            if len(file_names) != len(param_objs):
-                raise ValueError(
-                    "The length of the input filenames list does not match the number of input parameter objects.")
-            pass
+    Args:
+        param_objs: List of PRMSParameters objects to join
+        separate_files: If True, maintain separate file tracking (not applicable for pywatershed)
+        file_names: Optional list of filenames for tracking purposes
 
-        for i, p in enumerate(param_objs):
-            for r in p.parameters_list:
-                if r in joined_lst:
-                    continue
-                else:
-                    r.file_name = file_names[i]
-                    joined_lst.append(r)
+    Returns:
+        PRMSParameters: A merged parameter object
+    """
+    if len(param_objs) == 0:
+        raise ValueError("No parameter objects provided to join.")
 
-    return pygsflowparams(joined_lst)
+    # Start with the first parameter object
+    merged = PRMSParameters()
+    merged.parameters = param_objs[0].parameters.copy()
+
+    # Merge remaining parameter objects
+    for p in param_objs[1:]:
+        merged.merge_parameters(p)
+
+    return merged
 
 
 def validate_param_dset(param_dset: xr.Dataset) -> bool:
@@ -1428,11 +1319,12 @@ def get_prms_dtype(dtype, platform):
                     outtype = item['PRMS']
                     return outtype
         elif platform != 'numpy':
-                if dtype == item[platform]:
-                    outtype = item['PRMS']
-                    return outtype
+            if dtype == item[platform]:
+                outtype = item['PRMS']
+                return outtype
         else:
             raise ValueError("The input dtype could not be resolved to a prms dtype code.")
+
 
 def ddsolrad_defaults(paramob: PRMSParameters,
                       spatial_dim: Optional[str] = 'nhru',
@@ -1514,25 +1406,26 @@ def ddsolrad_defaults(paramob: PRMSParameters,
         paramob.add_parameter('tmax_index', np.ones((12, sdim_val)) * 50.0, [12, sdim_val],
                               ['nmonths', spatial_dim])
     elif time_dim & (spatial_dim == 'one'):
-        paramob.add_parameter('dday_intcp',np.ones(12, dtype=float) * -40.0,12,'nmonths')
-        paramob.add_parameter('dday_slope',np.ones(12, dtype=float) * 0.4,12,'nmonths')
-        paramob.add_parameter('ppt_rad_adj',np.ones(12, dtype=float) * 0.02,12,'nmonths')
-        paramob.add_parameter('radadj_intcp',np.ones(12, dtype=float) * 1.0,12,'nmonths')
-        paramob.add_parameter('radadj_slope',np.ones(12, dtype=float) * 0.0,12,'nmonths')
-        paramob.add_parameter('radj_sppt',np.array([0.44]),sdim_val,spatial_dim)
-        paramob.add_parameter('radj_wppt',np.array([0.5]),sdim_val,spatial_dim)
-        paramob.add_parameter('radmax',np.array([0.8]),sdim_val,spatial_dim)
-        paramob.add_parameter('tmax_index',np.array([50.0]),sdim_val,spatial_dim)
+        paramob.add_parameter('dday_intcp', np.ones(12, dtype=float) * -40.0, 12, 'nmonths')
+        paramob.add_parameter('dday_slope', np.ones(12, dtype=float) * 0.4, 12, 'nmonths')
+        paramob.add_parameter('ppt_rad_adj', np.ones(12, dtype=float) * 0.02, 12, 'nmonths')
+        paramob.add_parameter('radadj_intcp', np.ones(12, dtype=float) * 1.0, 12, 'nmonths')
+        paramob.add_parameter('radadj_slope', np.ones(12, dtype=float) * 0.0, 12, 'nmonths')
+        paramob.add_parameter('radj_sppt', np.array([0.44]), sdim_val, spatial_dim)
+        paramob.add_parameter('radj_wppt', np.array([0.5]), sdim_val, spatial_dim)
+        paramob.add_parameter('radmax', np.array([0.8]), sdim_val, spatial_dim)
+        paramob.add_parameter('tmax_index', np.array([50.0]), sdim_val, spatial_dim)
     else:
-        paramob.add_parameter('dday_intcp',np.ones(sdim_val) * -40.0, sdim_val, spatial_dim)
-        paramob.add_parameter('dday_slope',np.ones(sdim_val) * 0.4,sdim_val, spatial_dim)
-        paramob.add_parameter('ppt_rad_adj',np.ones(sdim_val) * 0.02,sdim_val, spatial_dim)
-        paramob.add_parameter('radadj_intcp',np.ones(sdim_val) * 1.0,sdim_val, spatial_dim)
-        paramob.add_parameter('radadj_slope',np.ones(sdim_val) * 0.0,sdim_val, spatial_dim)
-        paramob.add_parameter('radj_sppt',np.ones(sdim_val) * 0.44,sdim_val, spatial_dim)
-        paramob.add_parameter('radj_wppt',np.ones(sdim_val) * 0.5,sdim_val, spatial_dim)
-        paramob.add_parameter('radmax',np.ones(sdim_val) * 0.8,sdim_val, spatial_dim)
-        paramob.add_parameter('tmax_index',np.ones(sdim_val) * 50.0,sdim_val, spatial_dim)
+        paramob.add_parameter('dday_intcp', np.ones(sdim_val) * -40.0, sdim_val, spatial_dim)
+        paramob.add_parameter('dday_slope', np.ones(sdim_val) * 0.4, sdim_val, spatial_dim)
+        paramob.add_parameter('ppt_rad_adj', np.ones(sdim_val) * 0.02, sdim_val, spatial_dim)
+        paramob.add_parameter('radadj_intcp', np.ones(sdim_val) * 1.0, sdim_val, spatial_dim)
+        paramob.add_parameter('radadj_slope', np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
+        paramob.add_parameter('radj_sppt', np.ones(sdim_val) * 0.44, sdim_val, spatial_dim)
+        paramob.add_parameter('radj_wppt', np.ones(sdim_val) * 0.5, sdim_val, spatial_dim)
+        paramob.add_parameter('radmax', np.ones(sdim_val) * 0.8, sdim_val, spatial_dim)
+        paramob.add_parameter('tmax_index', np.ones(sdim_val) * 50.0, sdim_val, spatial_dim)
+
 
 def transp_tindex_and_intercept_from_rasters(paramob: PRMSParameters,
                                              veg_type: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
@@ -1540,7 +1433,8 @@ def transp_tindex_and_intercept_from_rasters(paramob: PRMSParameters,
                                              sand: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
                                              clay: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
                                              spatial_dim: Optional[str] = 'nhru',
-                                             nsub: Optional[int] = None):
+                                             nsub: Optional[int] = None,
+                                             remap_funcs: Optional[dict] = None):
     """
     Assigns the transp_tindex and interception parameters from vegetation type, cover, and soils raster datasets. These
     datasets should come from LANDFIRE and SSURGO (or mimic their classification scheme) as the raster remaps used are
@@ -1564,6 +1458,7 @@ def transp_tindex_and_intercept_from_rasters(paramob: PRMSParameters,
             between 0.0 and 1.0.
         spatial_dim:
         nsub:
+        remap_funcs: Optional dictionary of remap functions to use instead of builder_utils
 
 
     Returns: None
@@ -1575,49 +1470,49 @@ def transp_tindex_and_intercept_from_rasters(paramob: PRMSParameters,
                          "mapping of paramters.")
 
     mod_vtype = calc_zonal_stats(paramob.grid, veg_type,
-                                    stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
-                                    all_touched=True)
+                                 stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
+                                 all_touched=True)
     mod_vtype = mod_vtype.values.ravel()
     mod_vcov = calc_zonal_stats(paramob.grid, veg_cover,
-                                   stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
-                                   all_touched=True)
+                                stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
+                                all_touched=True)
     mod_vcov = mod_vcov.values.ravel()
     mod_clay = calc_zonal_stats(paramob.grid, clay, stats='median', all_touched=True)
     mod_clay = mod_clay.values.ravel()
     mod_sand = calc_zonal_stats(paramob.grid, sand, stats='median', all_touched=True)
     mod_sand = mod_sand.values.ravel()
 
-    remaps = {}
-    for r in (prep.root / prep.raster_remaps).glob('*.rmp'):
-        remaps[r.stem] = bu.build_lut(r)
+    # Note: The builder_utils (bu) functions need to be replaced with equivalent functionality
+    # If you have custom remap functions, pass them in the remap_funcs dictionary
+    if remap_funcs is None:
+        raise NotImplementedError(
+            "The builder_utils module from gsflow is no longer available. "
+            "Please provide custom remap functions via the remap_funcs argument, "
+            "or implement the required parameter transformations using pywatershed utilities."
+        )
 
-    covtype_lut = remaps[[k for k in remaps.keys() if 'covtype' in k][0]]
-    covdensum_lut = remaps[[k for k in remaps.keys() if 'covdensum' in k][0]]
-    covdenwin_lut = remaps[[k for k in remaps.keys() if 'covdenwin' in k][0]]
-    snowintcp_lut = remaps[[k for k in remaps.keys() if 'snow_intcp' in k][0]]
-    srainintcp_lut = remaps[[k for k in remaps.keys() if 'srain_intcp' in k][0]]
+    # Apply custom remap functions
+    covtype_vals = remap_funcs['covtype'](mod_vtype)
+    covden_sum_vals = remap_funcs['covden_sum'](mod_vcov)
+    covden_win_vals = remap_funcs['covden_win'](covtype_vals)
+    rad_trncf_vals = remap_funcs['rad_trncf'](covden_win_vals)
+    snow_intcp_vals = remap_funcs['snow_intcp'](mod_vtype)
+    srain_intcp_vals = remap_funcs['srain_intcp'](mod_vtype)
+    wrain_intcp_vals = remap_funcs['wrain_intcp'](mod_vtype)
+    soil_type_vals = remap_funcs['soil_type'](mod_clay, mod_sand)
 
-    # define raster based transp_tindex and interception params
-    covtype = bu.covtype(mod_vtype, covtype_lut)
-    covden_sum = bu.covden_sum(mod_vcov, covdensum_lut)
-    covden_win = bu.covden_win(covtype.values, covdenwin_lut)
-    rad_trncf = bu.rad_trncf(covden_win.values)
-    snow_intcp = bu.snow_intcp(mod_vtype, snowintcp_lut)
-    srain_intcp = bu.srain_intcp(mod_vtype, srainintcp_lut)
-    wrain_intcp = bu.wrain_intcp(mod_vtype, snowintcp_lut)
-    soil_type = bu.soil_type(mod_clay, mod_sand)
-
-    paramob.add_pygsflow_record(covtype)
-    paramob.add_pygsflow_record(covden_sum)
-    paramob.add_pygsflow_record(covden_win)
-    paramob.add_pygsflow_record(rad_trncf)
-    paramob.add_pygsflow_record(snow_intcp)
-    paramob.add_pygsflow_record(srain_intcp)
-    paramob.add_pygsflow_record(wrain_intcp)
-    paramob.add_pygsflow_record(soil_type)
+    # Add parameters directly using values
+    paramob.add_parameter('covtype', covtype_vals, len(covtype_vals), 'nhru')
+    paramob.add_parameter('covden_sum', covden_sum_vals, len(covden_sum_vals), 'nhru')
+    paramob.add_parameter('covden_win', covden_win_vals, len(covden_win_vals), 'nhru')
+    paramob.add_parameter('rad_trncf', rad_trncf_vals, len(rad_trncf_vals), 'nhru')
+    paramob.add_parameter('snow_intcp', snow_intcp_vals, len(snow_intcp_vals), 'nhru')
+    paramob.add_parameter('srain_intcp', srain_intcp_vals, len(srain_intcp_vals), 'nhru')
+    paramob.add_parameter('wrain_intcp', wrain_intcp_vals, len(wrain_intcp_vals), 'nhru')
+    paramob.add_parameter('soil_type', soil_type_vals, len(soil_type_vals), 'nhru')
 
     if spatial_dim == 'nhru':
-            sdim_val = len(paramob.grid)
+        sdim_val = len(paramob.grid)
     elif spatial_dim == 'nsub':
         if nsub is None:
             msg = ("Dimension is set to 'nsub' but no nsub argument was specified, defaults will "
@@ -1643,12 +1538,14 @@ def transp_tindex_and_intercept_from_rasters(paramob: PRMSParameters,
     paramob.add_parameter('transp_end', np.ones(sdim_val, dtype=int) * 13, sdim_val, spatial_dim)
     paramob.add_parameter('transp_tmax', np.ones(sdim_val, dtype=float), sdim_val, spatial_dim)
 
+
 def soilzone_and_srunoff_smidx_from_rasters(paramob: PRMSParameters,
                                             veg_type: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
                                             awc: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
                                             impervious: Union[str, Path, rio.DatasetReader, xr.DataArray, xr.Dataset],
                                             spatial_dim: Optional[str] = 'nhru',
-                                            nsub: Optional[int] = None):
+                                            nsub: Optional[int] = None,
+                                            remap_funcs: Optional[dict] = None):
     """
 
     Args:
@@ -1658,6 +1555,7 @@ def soilzone_and_srunoff_smidx_from_rasters(paramob: PRMSParameters,
         impervious:
         spatial_dim:
         nsub:
+        remap_funcs: Optional dictionary of remap functions to use instead of builder_utils
 
     Returns:
 
@@ -1667,32 +1565,37 @@ def soilzone_and_srunoff_smidx_from_rasters(paramob: PRMSParameters,
                          "mapping of paramters.")
 
     mod_vtype = calc_zonal_stats(paramob.grid, veg_type,
-                                    stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
-                                    all_touched=True)
+                                 stats=[lambda x: pd.Series.mode(x)[0] if not pd.Series.mode(x).empty else np.nan],
+                                 all_touched=True)
     mod_vtype = mod_vtype.values.ravel()
     mod_awc = calc_zonal_stats(paramob.grid, awc, stats='median', all_touched=True)
     mod_awc = mod_awc.values.ravel()
     mod_imperv = calc_zonal_stats(paramob.grid, impervious, stats='mean', all_touched=True)
     mod_imperv = mod_imperv.values.ravel()
 
-    remaps = {}
-    for r in (prep.root / prep.raster_remaps).glob('*.rmp'):
-        remaps[r.stem] = bu.build_lut(r)
+    # Note: The builder_utils (bu) functions need to be replaced with equivalent functionality
+    if remap_funcs is None:
+        raise NotImplementedError(
+            "The builder_utils module from gsflow is no longer available. "
+            "Please provide custom remap functions via the remap_funcs argument, "
+            "or implement the required parameter transformations using pywatershed utilities."
+        )
 
     # soil_moist_max is the only thing set by rasters, vegtype -> root depth, root depth & awc used to estimate
     # soil_moist_max
-    rtdepth_lut = remaps[[k for k in remaps.keys() if 'rtdepth' in k][0]]
-    rtdepth = bu.root_depth(mod_vtype, rtdepth_lut)
-    soil_moistmx = bu.soil_moist_max(mod_awc, rtdepth)
-    paramob.add_pygsflow_record(soil_moistmx)
+    rtdepth_vals = remap_funcs['root_depth'](mod_vtype)
+    soil_moistmx_vals = remap_funcs['soil_moist_max'](mod_awc, rtdepth_vals)
+
+    paramob.add_parameter('soil_moist_max', soil_moistmx_vals, len(soil_moistmx_vals), 'nhru')
+
     # impervious area and carea_max from NLCD impervious raster for srunoff_smidx
     mod_imperv[np.isnan(mod_imperv)] = np.nanmean(mod_imperv)
-    paramob.add_parameter("hru_percent_imperv",mod_imperv,len(mod_imperv),'nhru')
-    paramob.add_parameter("carea_max",1 - mod_imperv,len(mod_imperv),'nhru')
+    paramob.add_parameter("hru_percent_imperv", mod_imperv, len(mod_imperv), 'nhru')
+    paramob.add_parameter("carea_max", 1 - mod_imperv, len(mod_imperv), 'nhru')
 
     if spatial_dim == 'nhru':
-            sdim_val = len(paramob.grid)
-            ssr_dim = 'nssr'
+        sdim_val = len(paramob.grid)
+        ssr_dim = 'nssr'
     elif spatial_dim == 'nsub':
         if nsub is None:
             msg = ("Dimension is set to 'nsub' but no nsub argument was specified, defaults will "
@@ -1716,25 +1619,26 @@ def soilzone_and_srunoff_smidx_from_rasters(paramob: PRMSParameters,
     else:
         raise ValueError("The spatial dimension is not recognized as 'nhru', 'nsub', or 'one'")
     # defaults for other srunoff_smiddx params
-    paramob.add_parameter('imperv_stor_max',np.ones(sdim_val, dtype=float) * 0.05, sdim_val, spatial_dim)
-    paramob.add_parameter('smidx_coef',np.ones(sdim_val, dtype=float) * 0.005, sdim_val, spatial_dim)
-    paramob.add_parameter('smidx_exp',np.ones(sdim_val, dtype=float) * 0.3, sdim_val, spatial_dim)
-    paramob.add_parameter('snowinfil_max',np.ones(sdim_val, dtype=float) * 2.0, sdim_val, spatial_dim)
+    paramob.add_parameter('imperv_stor_max', np.ones(sdim_val, dtype=float) * 0.05, sdim_val, spatial_dim)
+    paramob.add_parameter('smidx_coef', np.ones(sdim_val, dtype=float) * 0.005, sdim_val, spatial_dim)
+    paramob.add_parameter('smidx_exp', np.ones(sdim_val, dtype=float) * 0.3, sdim_val, spatial_dim)
+    paramob.add_parameter('snowinfil_max', np.ones(sdim_val, dtype=float) * 2.0, sdim_val, spatial_dim)
     # the rest of the soil zone and runoff params are defaults
-    paramob.add_parameter('fastcoef_lin',np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
-    paramob.add_parameter('fastcoef_sq',np.ones(sdim_val) * 0.8, sdim_val, spatial_dim)
-    paramob.add_parameter('slowcoef_lin',np.ones(sdim_val) * 0.015, sdim_val, spatial_dim)
-    paramob.add_parameter('slowcoef_sq',np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
-    paramob.add_parameter('soil2gw_max',np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
-    paramob.add_parameter('ssr2gw_exp',np.ones(sdim_val) * 1.0, sdim_val, ssr_dim)
-    paramob.add_parameter('ssr2gw_rate',np.ones(sdim_val) * 0.1, sdim_val, ssr_dim)
-    paramob.add_parameter('soil_rechr_max_frac',np.ones(sdim_val) * 1.0, sdim_val, spatial_dim)
-    paramob.add_parameter('pref_flow_den',np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
-    paramob.add_parameter('pref_flow_infil_frac',np.ones(sdim_val) * -1.0, sdim_val, spatial_dim)
-    paramob.add_parameter('sat_threshold',np.ones(sdim_val) * 999.0, sdim_val, spatial_dim)
-    paramob.add_parameter("soil_moist_init_frac",np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
-    paramob.add_parameter("ssstor_init_frac",np.ones(sdim_val) * 0.1, sdim_val, ssr_dim)
-    paramob.add_parameter("soil_rechr_init_frac",np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
+    paramob.add_parameter('fastcoef_lin', np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
+    paramob.add_parameter('fastcoef_sq', np.ones(sdim_val) * 0.8, sdim_val, spatial_dim)
+    paramob.add_parameter('slowcoef_lin', np.ones(sdim_val) * 0.015, sdim_val, spatial_dim)
+    paramob.add_parameter('slowcoef_sq', np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
+    paramob.add_parameter('soil2gw_max', np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
+    paramob.add_parameter('ssr2gw_exp', np.ones(sdim_val) * 1.0, sdim_val, ssr_dim)
+    paramob.add_parameter('ssr2gw_rate', np.ones(sdim_val) * 0.1, sdim_val, ssr_dim)
+    paramob.add_parameter('soil_rechr_max_frac', np.ones(sdim_val) * 1.0, sdim_val, spatial_dim)
+    paramob.add_parameter('pref_flow_den', np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
+    paramob.add_parameter('pref_flow_infil_frac', np.ones(sdim_val) * -1.0, sdim_val, spatial_dim)
+    paramob.add_parameter('sat_threshold', np.ones(sdim_val) * 999.0, sdim_val, spatial_dim)
+    paramob.add_parameter("soil_moist_init_frac", np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
+    paramob.add_parameter("ssstor_init_frac", np.ones(sdim_val) * 0.1, sdim_val, ssr_dim)
+    paramob.add_parameter("soil_rechr_init_frac", np.ones(sdim_val) * 0.1, sdim_val, spatial_dim)
+
 
 def groundwater_flow_defaults(paramob: PRMSParameters,
                               spatial_dim: Optional[str] = 'ngw',
@@ -1805,6 +1709,7 @@ def groundwater_flow_defaults(paramob: PRMSParameters,
     paramob.add_parameter('gwstor_min', np.ones(sdim_val) * 0.0, sdim_val, spatial_dim)
     paramob.add_parameter("gwstor_init", np.ones(sdim_val) * 2.0, sdim_val, spatial_dim)
 
+
 def routing_defaults(paramob: PRMSParameters,
                      nsegment: int,
                      segtype: Optional[np.ndarray] = None,
@@ -1840,6 +1745,7 @@ def routing_defaults(paramob: PRMSParameters,
     else:
         raise NotImplementedError("The specified PRMS streamflow module is not supported yet.")
 
+
 def lake_routing_defaults(paramob: PRMSParameters,
                           nlake: int,
                           lake_method: str = 'linear'):
@@ -1864,6 +1770,7 @@ def lake_routing_defaults(paramob: PRMSParameters,
         paramob.add_parameter('lake_coef', np.ones(nlake) * 0.1, nlake, 'nlake')
     else:
         raise NotImplementedError("The specified PRMS lake routing method is not supported yet.")
+
 
 def set_output_options(paramob: PRMSParameters,
                        print_freq: int = 3,

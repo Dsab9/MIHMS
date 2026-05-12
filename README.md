@@ -10,6 +10,8 @@
  conda create -n mihms python=3.10
  conda activate mihms
  conda install xarray rasterio geopandas pandas numpy rioxarray dask zarr tomli
+ or
+ conda install -c conda-forge xarray rasterio geopandas pandas numpy rioxarray dask zarr tomli flopy spotpy pywatershed
  ```
 
 then, manually install remaining high-level packages with pip
